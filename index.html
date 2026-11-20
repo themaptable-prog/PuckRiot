@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#090c1e">
-<title>Puck Riot v0.11</title>
+<title>Puck Riot v0.12</title>
 <style>:root {
   color-scheme: dark;
   --ink: #090c1d; --surface: #11172a; --panel: #171e34; --line: #37435e;
@@ -290,7 +290,7 @@ h3 { font-size: 1rem; }
 
   <section class="overlay" id="homeScreen" aria-label="Puck Riot menu" hidden>
     <div class="card home panel-shell" id="setup">
-      <div class="screen-head"><h1>Puck <em>Riot</em></h1><span class="version">v0.11</span></div>
+      <div class="screen-head"><h1>Puck <em>Riot</em></h1><span class="version">v0.12</span></div>
       <div class="section-tabs home-tabs" aria-label="Game menu">
         <button id="arenaTab" type="button" data-pane="arenaPane" aria-pressed="true">Arena</button>
         <button id="playersTab" type="button" data-pane="playersPane" aria-pressed="false">Players</button>
@@ -385,7 +385,7 @@ h3 { font-size: 1rem; }
       <div class="guide-controls">
         <p>Start a drag in your coloured zone. You’ll keep control of your paddle until you lift that finger. The dashed aim line predicts the bounce off your paddle.</p>
         <p>Outside Classic, pull your finger toward your goal and release to send a short, curved boost into the arena. For Laser and Absorber, the line runs from your goal centre through your paddle. Slide to aim and lift to fire.</p>
-        <p>Start near your wall and swipe into the arena past your paddle. The dotted paddle shows the reach, which is half your drag. Lift to sweep through any pucks in that path, or move back behind the paddle to cancel.</p>
+        <p>Start near your wall and swipe into the arena past your paddle. The arrow follows your drag and the dotted paddle shows how far the sweep reaches. Lift to sweep through pucks in that path, or move back behind the paddle to cancel.</p>
         <p>Tap the centre button to pause. Hold it for three seconds to shake the pucks. Releasing during the charge cancels it.</p>
         <p class="keyboard-hint">P1 W/S + E, P2 ↑/↓ + /, P3 F/G + H, P4 J/K + L. Hold the attack key and release. Hold X to shake. P pauses.</p>
       </div>
@@ -2641,21 +2641,25 @@ function updateSpinSwipe(record, pad, alongPaddle, fromWall, pointer) {
 const SPIN_OUT = .085, SPIN_RETURN = .105;
 function spinGuide(model, record) {
   const pad = model.players[record.player], edge = model.court.seats[record.player].edge;
-  const origin = edgePoint(edge, pad.s, model.court.padDepth);
+  const { padDepth } = model.court;
+  const origin = edgePoint(edge, pad.s, padDepth);
   const touch = { ...record.spinPointer };
   projectInside(model.court, touch, 10);
   const length = Math.hypot(touch.x - origin.x, touch.y - origin.y);
   const side = -record.spinSide * length * .15 * record.spinAmount;
   const elbow = point(origin.x + edge.nx * length * .55 + edge.tx * side,
     origin.y + edge.ny * length * .55 + edge.ty * side);
-  const guide = { origin, elbow, tip: touch };
+  const guide = { origin, elbow, tip: touch, reach: 0 };
+  const dragDepth = Math.max(0, depth(edge, touch.x, touch.y) - padDepth);
+  const maxTravel = Math.min(length / 2, dragDepth, padDepth);
+  if (length < 14 || maxTravel === 0) return guide;
   let low = 0, high = 1;
   for (let i = 0; i < 12; i++) {
     const t = (low + high) / 2, at = spinPoint(guide, t);
-    if (Math.hypot(at.x - origin.x, at.y - origin.y) > length / 2) high = t;
+    if (Math.hypot(at.x - origin.x, at.y - origin.y) > maxTravel) high = t;
     else low = t;
   }
-  guide.reach = (low + high) / 2;
+  guide.reach = low;
   return guide;
 }
 function spinPoint(guide, fraction) {
@@ -2677,7 +2681,7 @@ function releaseSpinStrike(record) {
   const index = record.player, pad = game.players[index];
   if (pad.brokenUntil > game.elapsed || playerOn(game, index, 'freeze') || pad.spinStrike) return;
   const guide = spinGuide(game, record);
-  if (Math.hypot(guide.tip.x - guide.origin.x, guide.tip.y - guide.origin.y) < 14) return;
+  if (!guide.reach) return;
   pad.spinStrike = { guide, birth: game.elapsed, amount: record.spinAmount, side: record.spinSide, hits: new Set() };
   playSound('shot');
 }
@@ -2759,6 +2763,7 @@ function drawSpinPreviews(model) {
     for (const bend of [-.52, .52]) {
       path([tip.x, tip.y], [tip.x - Math.cos(tipAngle + bend) * 13, tip.y - Math.sin(tipAngle + bend) * 13], colour, 3);
     }
+    if (!guide.reach) continue;
     const ghost = spinPoint(guide, guide.reach), half = padHalf(model, index);
     ctx.save();
     ctx.translate(ghost.x, ghost.y);
@@ -4506,7 +4511,12 @@ function endFinger(event, fired) {
   pad.charge = 0;
   const aiming = pad.store.length || game.pucks.some(puck=>puck.hold==='laser' && puck.holder===record.player);
   if (record.spinCrossed && !aiming) {
-    if (fired && record.spinAmount) releaseSpinStrike(record);
+    if (fired && screenState === 'play') {
+      const here = worldPointer(event);
+      const { edge } = game.court.seats[record.player];
+      updateSpinSwipe(record, pad, along(edge, here.x, here.y), depth(edge, here.x, here.y), here);
+      if (record.spinAmount) releaseSpinStrike(record);
+    }
     return;
   }
   if (fired && screenState === 'play') {
